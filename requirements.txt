@@ -1,0 +1,4 @@
+scapy>=2.5.0
+typer[all]>=0.9.0
+pydantic>=2.0.0
+rich>=13.0.0
