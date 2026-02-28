@@ -7,9 +7,13 @@ from __future__ import annotations
 from typing import Optional
 
 import typer
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.panel import Panel
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
+
+from zidle.models.zombie import ZombieProfile
 
 from zidle import __version__
 from zidle.core.idle_scan import IdleScanEngine
@@ -89,6 +93,7 @@ def _print_guide() -> None:
     ex_table.add_row("Profile range (Nmap)", "[bold]zidle profile 192.168.1.1-254[/]")
     ex_table.add_row("Profile list", "[bold]zidle profile 192.168.1.1,2,5,207[/]")
     ex_table.add_row("Zombies only + JSON", "[bold]zidle profile 192.168.1.0/24 -z -j[/]")
+    ex_table.add_row("Multiple probe ports", "[bold]zidle profile 192.168.1.0/24 --probe-port 80,443,22[/]")
     ex_table.add_row("Idle scan", "[bold]zidle scan -z 192.168.1.207 -t 192.168.1.1 -p 22,80,443[/]")
     ex_table.add_row("Scan with probe port", "[bold]zidle scan -z Z -t T -p 1-1000 --probe-port 80[/]")
     c.print(Panel(ex_table, title="Examples", border_style="yellow"))
@@ -109,7 +114,25 @@ def guide() -> None:
     _print_guide()
 
 
-EPILOG_PROFILE = "Target: CIDR (192.168.1.0/24), range (1-254), or list (1,2,5). Examples: zidle profile 192.168.1.10 | zidle profile 192.168.1.0/24 -z -j"
+def _zombies_found_renderable(zombies_found: list[ZombieProfile]) -> Panel:
+    """Build a panel showing zombies found so far (for live display)."""
+    if not zombies_found:
+        return Panel(
+            "[dim]No suitable zombies yet...[/]",
+            title="[bold green]Zombies found[/]",
+            border_style="green",
+        )
+    t = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
+    t.add_column("IP", style="cyan")
+    t.add_column("Probe Port", justify="right")
+    t.add_column("Avg Delta", justify="right")
+    t.add_column("Noise", justify="right")
+    for p in zombies_found:
+        t.add_row(p.ip, str(p.probe_port), f"{p.avg_delta:.2f}", f"{p.noise_score:.2f}")
+    return Panel(t, title=f"[bold green]Zombies found[/] ({len(zombies_found)})", border_style="green")
+
+
+EPILOG_PROFILE = "Target: CIDR, range, or list. Probe ports: 80 or 80,443,22. Examples: zidle profile 192.168.1.10 | zidle profile 192.168.1.0/24 --probe-port 80,443,22"
 
 
 @app.command(epilog=EPILOG_PROFILE)
@@ -122,9 +145,9 @@ def profile(
         None, "--my-ip", "-m",
         help="Our IP (if auto-detect fails)",
     ),
-    probe_port: int = typer.Option(
-        80, "--probe-port",
-        help="Port for SYN probe [default: 80]",
+    probe_port: str = typer.Option(
+        "80", "--probe-port",
+        help="Port(s) for SYN probe: 80 or 80,443,22 [default: 80]",
     ),
     samples: int = typer.Option(
         10, "--samples", "-n",
@@ -157,19 +180,54 @@ def profile(
         typer.echo("Error: No valid targets (only our own IP?).", err=True)
         raise typer.Exit(1)
 
+    try:
+        probe_ports = parse_ports(probe_port)
+    except ValueError as e:
+        typer.echo(f"Error: Invalid probe-port: {e}", err=True)
+        raise typer.Exit(1)
+    if not probe_ports:
+        probe_ports = [80]
+
     profiler = ZombieProfiler()
     profiles: list = []
+    zombies_found: list[ZombieProfile] = []
+    total_tasks = len(targets) * len(probe_ports)
+    console = Console(force_terminal=True)
 
-    with typer.progressbar(targets, label="Scanning") as progress:
-        for ip in progress:
-            p = profiler.profile(my_ip, ip, sample_count=samples, probe_port=probe_port)
-            profiles.append(p)
+    progress = Progress(
+        TextColumn("[bold blue]Scanning[/]"),
+        TextColumn("[cyan]{task.fields[info]}[/]", justify="left"),
+        BarColumn(bar_width=24, complete_style="green", finished_style="bold green"),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        expand=False,
+    )
+    task_id = progress.add_task("", total=total_tasks, info="")
+    completed = 0
+
+    with Live(
+        Group(_zombies_found_renderable(zombies_found), progress),
+        console=console,
+        refresh_per_second=8,
+    ) as live:
+        for ip in targets:
+            for port in probe_ports:
+                progress.update(task_id, info=f"{ip}:{port}", completed=completed)
+                p = profiler.profile(my_ip, ip, sample_count=samples, probe_port=port)
+                profiles.append(p)
+                if p.is_zombie:
+                    zombies_found.append(p)
+                completed += 1
+                progress.update(task_id, completed=completed)
+                live.update(Group(_zombies_found_renderable(zombies_found), progress))
 
     if json_output:
         if zombies_only:
             profiles = [p for p in profiles if p.is_zombie]
         typer.echo(format_json([p.model_dump() for p in profiles]))
     else:
+        console.print()
         format_zombie_profiles(profiles, zombies_only=zombies_only)
 
 
