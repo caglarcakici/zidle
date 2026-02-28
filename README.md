@@ -10,11 +10,48 @@ Python tool for stealth port scanning using the zombie idle scan technique (Nmap
 
 ## Install
 
+### Option 1: Direct install
+
 ```bash
+git clone https://github.com/caglarcakici/zidle.git
+cd zidle
 pip install -e .
 ```
 
-This installs the **`zidle`** command. You can then run:
+This installs the **`zidle`** command.
+
+### Option 2: Virtual environment (recommended on Kali / Debian)
+
+On Kali or other Debian-based systems, system Python packages can conflict with pip. Using a **venv** keeps dependencies isolated and avoids touching system packages:
+
+```bash
+git clone https://github.com/caglarcakici/zidle.git
+cd zidle
+python3 -m venv .venv
+source .venv/bin/activate    # Linux/macOS
+pip install -e .
+```
+
+Run `zidle` with the venv activated:
+
+```bash
+zidle --help
+zidle profile 192.168.1.0/24
+zidle scan -z ZOMBIE_IP -t TARGET_IP -p 22,80,443
+```
+
+Because raw sockets need root, use one of:
+
+```bash
+sudo .venv/bin/zidle --help
+sudo .venv/bin/python -m zidle profile 192.168.1.0/24
+# or with venv activated:
+sudo $(which zidle) profile 192.168.1.0/24
+```
+
+(On Windows: `.venv\Scripts\activate` and `python -m zidle`.)
+
+### After install
 
 ```bash
 zidle --help
@@ -23,7 +60,7 @@ zidle profile 192.168.1.0/24
 zidle scan -z ZOMBIE_IP -t TARGET_IP -p 22,80,443
 ```
 
-Alternatively, run without installing: `python -m zidle` (from the project root).
+Without installing, from the project root: `python -m zidle`.
 
 ## Usage
 
