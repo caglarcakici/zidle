@@ -4,6 +4,7 @@ Zidle - Zombie Idle Scan CLI.
 
 from __future__ import annotations
 
+import signal
 from typing import Optional
 
 import typer
@@ -205,22 +206,51 @@ def profile(
     )
     task_id = progress.add_task("", total=total_tasks, info="")
     completed = 0
+    interrupt_requested = False
 
-    with Live(
-        Group(_zombies_found_renderable(zombies_found), progress),
-        console=console,
-        refresh_per_second=8,
-    ) as live:
-        for ip in targets:
-            for port in probe_ports:
-                progress.update(task_id, info=f"{ip}:{port}", completed=completed)
-                p = profiler.profile(my_ip, ip, sample_count=samples, probe_port=port)
-                profiles.append(p)
-                if p.is_zombie:
-                    zombies_found.append(p)
-                completed += 1
-                progress.update(task_id, completed=completed)
-                live.update(Group(_zombies_found_renderable(zombies_found), progress))
+    def _sigint_handler(signum: int, frame: object) -> None:
+        nonlocal interrupt_requested
+        interrupt_requested = True
+        console.print("\r[yellow]Stopping after current probe... (Ctrl+C again to force)[/]")
+
+    old_sigint = signal.signal(signal.SIGINT, _sigint_handler)
+    try:
+        with Live(
+            Group(_zombies_found_renderable(zombies_found), progress),
+            console=console,
+            refresh_per_second=8,
+        ) as live:
+            for ip in targets:
+                if interrupt_requested:
+                    break
+                for port in probe_ports:
+                    if interrupt_requested:
+                        break
+                    progress.update(task_id, info=f"{ip}:{port}", completed=completed)
+                    p = profiler.profile(
+                        my_ip,
+                        ip,
+                        sample_count=samples,
+                        probe_port=port,
+                        stop_check=lambda: interrupt_requested,
+                    )
+                    profiles.append(p)
+                    if p.is_zombie:
+                        zombies_found.append(p)
+                    completed += 1
+                    progress.update(task_id, completed=completed)
+                    live.update(Group(_zombies_found_renderable(zombies_found), progress))
+    except KeyboardInterrupt:
+        interrupt_requested = True
+    finally:
+        signal.signal(signal.SIGINT, old_sigint)
+
+    if interrupt_requested:
+        console.print("\n[yellow]Interrupted (Ctrl+C).[/]")
+        if profiles:
+            console.print("[dim]Partial results:[/]")
+            format_zombie_profiles(profiles, zombies_only=zombies_only)
+        raise typer.Exit(130)
 
     if json_output:
         if zombies_only:
@@ -279,7 +309,12 @@ def scan(
 
     engine = PacketEngine(timeout=timeout)
     scanner = IdleScanEngine(packet_engine=engine)
-    result = scanner.scan(my_ip, zombie, target, port_list, probe_port=probe_port)
+    try:
+        result = scanner.scan(my_ip, zombie, target, port_list, probe_port=probe_port)
+    except KeyboardInterrupt:
+        console = Console()
+        console.print("\n[yellow]Interrupted (Ctrl+C).[/]")
+        raise typer.Exit(130)
 
     if json_output:
         typer.echo(format_json(result))

@@ -7,7 +7,7 @@ Determines if a given IP is suitable as a zombie (predictable IP ID, low noise).
 from __future__ import annotations
 
 import statistics
-from typing import Optional
+from typing import Callable, Optional
 
 from zidle.core.packets import PacketEngine
 from zidle.models.zombie import ZombieProfile
@@ -56,6 +56,7 @@ class ZombieProfiler:
         zombie_ip: str,
         sample_count: int = 10,
         probe_port: int = 80,
+        stop_check: Optional[Callable[[], bool]] = None,
     ) -> ZombieProfile:
         """
         Profile a zombie candidate.
@@ -64,7 +65,11 @@ class ZombieProfiler:
             ZombieProfile with suitability and probe_port used.
         """
         ip_ids = self.engine.probe_for_ip_ids(
-            my_ip, zombie_ip, count=sample_count, probe_port=probe_port
+            my_ip,
+            zombie_ip,
+            count=sample_count,
+            probe_port=probe_port,
+            stop_check=stop_check,
         )
 
         if len(ip_ids) < self.min_samples:

@@ -7,7 +7,7 @@ Scapy wrapper: SYN, probe packets; IP ID read; spoofing.
 from __future__ import annotations
 
 import random
-from typing import Optional
+from typing import Callable, Optional
 
 from scapy.all import IP, TCP, sr1, send, conf
 
@@ -59,15 +59,18 @@ class PacketEngine:
         zombie_ip: str,
         count: int = 10,
         probe_port: int = 80,
+        stop_check: Optional[Callable[[], bool]] = None,
     ) -> list[int]:
         """
         Send probes to zombie and collect IP IDs from responses.
 
         Each probe is a SYN to probe_port; zombie replies (SYN/ACK or RST).
-        Response IP ID reflects zombie's global counter.
+        If stop_check() returns True, the loop stops (for Ctrl+C).
         """
         ip_ids: list[int] = []
         for _ in range(count):
+            if stop_check and stop_check():
+                break
             pkt = self.build_probe(my_ip, zombie_ip, dport=probe_port)
             reply = self.send_and_recv(pkt)
             ip_id = self.get_ip_id(reply) if reply else None
